@@ -14,7 +14,7 @@ import { parseIptc } from './iptc-parser';
 const ENABLE_AVIF_EXPORT = true;
 
 console.log('[Code] Plugin starting, showing UI');
-figma.showUI(htmlContent, { width: 420, height: 400 }); // Increased height for thumbnail selection
+figma.showUI(htmlContent, { width: 420, height: 700 }); // Increased height to minimize scrolling
 
 // Check for multiple fills when selection changes
 figma.on('selectionchange', async () => {

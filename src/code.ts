@@ -17,6 +17,8 @@ figma.on('selectionchange', async () => {
 async function checkAndSendFillInfo() {
   if (figma.currentPage.selection.length === 0) {
     figma.ui.postMessage({ type: 'no-selection' });
+    // Reset button text
+    figma.ui.postMessage({ type: 'update-export-button', nodeName: null });
     return;
   }
   
@@ -25,13 +27,15 @@ async function checkAndSendFillInfo() {
   
   if (imageFills.length === 0) {
     figma.ui.postMessage({ type: 'no-image-fills' });
+    // Reset button text
+    figma.ui.postMessage({ type: 'update-export-button', nodeName: null });
     return;
   }
   
   if (imageFills.length === 1) {
     // Single fill - proceed normally and load metadata
     const imageHash = imageFills[0].imageHash;
-    figma.ui.postMessage({ type: 'single-fill', imageHash });
+    figma.ui.postMessage({ type: 'single-fill', imageHash, nodeName: node.name });
     // Load metadata for single image
     loadAndSendMetadata(imageHash).catch(err => {
       console.error('[Code] Error loading metadata:', err);
@@ -83,7 +87,8 @@ async function checkAndSendFillInfo() {
         hash: fill.imageHash,
         index: index + 1,
         thumbnail: undefined
-      }))
+      })),
+      nodeName: node.name
     });
   }
 }
@@ -218,7 +223,7 @@ async function exportSelectedWithMetadata(scale: number = 1, selectedImageHash?:
     jpgQuality: 1
   });
 
-  const fileName = `${node.name || 'export'}@${scale}x.jpg`;
+  const fileName = `${node.name || 'export'}.jpg`;
 
   figma.ui.postMessage({
     type: 'process-jpeg',

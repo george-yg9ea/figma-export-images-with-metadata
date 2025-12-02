@@ -10,6 +10,15 @@ function setStatus(text: string) {
   byId('status').textContent = text;
 }
 
+function updateExportButtonText(nodeName: string | null | undefined) {
+  const exportBtn = byId('export');
+  if (nodeName) {
+    exportBtn.textContent = `Export ${nodeName}`;
+  } else {
+    exportBtn.textContent = 'Export';
+  }
+}
+
 function getSelectedScale(): number {
   const scaleSelect = document.getElementById('scale-select') as HTMLSelectElement;
   return scaleSelect ? parseInt(scaleSelect.value, 10) : 2;
@@ -204,18 +213,28 @@ window.onmessage = async (event) => {
     // Single image fill - hide thumbnail selection and proceed normally
     hideThumbnailSelection();
     selectedImageHash = msg.imageHash;
+    // Update button text with node name
+    updateExportButtonText(msg.nodeName);
     // Metadata will be loaded automatically by code.ts
   } else if (msg.type === 'multiple-fills') {
     // Multiple image fills - show thumbnail selection
     showThumbnailSelection(msg.images || []);
+    // Update button text with node name if available
+    if (msg.nodeName) {
+      updateExportButtonText(msg.nodeName);
+    }
   } else if (msg.type === 'no-selection') {
     hideThumbnailSelection();
     hideMetadataDisplay();
     setStatus('');
+    updateExportButtonText(null);
   } else if (msg.type === 'no-image-fills') {
     hideThumbnailSelection();
     hideMetadataDisplay();
     setStatus('Selected node does not have an image fill.');
+    updateExportButtonText(null);
+  } else if (msg.type === 'update-export-button') {
+    updateExportButtonText(msg.nodeName);
   } else if (msg.type === 'process-jpeg') {
     try {
       setStatus('Merging metadata…');
@@ -539,7 +558,6 @@ function escapeHtml(text: string): string {
   parent.postMessage({ pluginMessage: { type: 'check-multiple-fills' } }, '*');
   
   const exportBtn = byId('export');
-  const closeBtn = byId('close');
   
         exportBtn.addEventListener('click', async () => {
           // Re-check selection before exporting (in case it changed)
@@ -558,10 +576,6 @@ function escapeHtml(text: string): string {
       } 
     }, '*');
   });
-  
-        closeBtn.addEventListener('click', () => {
-          parent.postMessage({ pluginMessage: { type: 'close' } }, '*');
-        });
       });
 
 // Message handler is already set above with window.onmessage

@@ -4,15 +4,6 @@ import htmlContent from '__html__';
 import { parseExif } from './exif-parser';
 import { parseIptc } from './iptc-parser';
 
-// ============================================================================
-// FEATURE FLAG: AVIF Export
-// ============================================================================
-// AVIF export is disabled by default due to performance limitations.
-// To enable: Set ENABLE_AVIF_EXPORT = true in both code.ts and ui.ts
-// See AVIF_FEATURE.md for details
-// ============================================================================
-const ENABLE_AVIF_EXPORT = true;
-
 console.log('[Code] Plugin starting, showing UI');
 figma.showUI(htmlContent, { width: 420, height: 700 }); // Increased height to minimize scrolling
 
@@ -233,66 +224,6 @@ async function exportSelectedWithMetadata(scale: number = 1, selectedImageHash?:
     type: 'process-jpeg',
     original: originalBytes,
     rendered: exportedBytes,
-    name: fileName
-  });
-}
-
-async function exportSelectedForAvif(scale: number = 1, selectedImageHash?: string) {
-  if (figma.currentPage.selection.length === 0) {
-    figma.notify('Select a node with an image fill.');
-    return;
-  }
-  const node = figma.currentPage.selection[0];
-  const imageFills = findAllImageFills(node);
-  
-  if (imageFills.length === 0) {
-    figma.notify('Selected node does not have an image fill.');
-    return;
-  }
-
-  // Determine which image hash to use
-  let imageHash: string;
-  if (selectedImageHash) {
-    // Use the user-selected image hash
-    imageHash = selectedImageHash;
-  } else if (imageFills.length === 1) {
-    // Single image fill - use it
-    imageHash = imageFills[0].imageHash;
-  } else {
-    // Multiple fills - use topmost (last in array)
-    imageHash = imageFills[imageFills.length - 1].imageHash;
-  }
-
-  if (!imageHash) {
-    figma.notify('No image hash found.');
-    return;
-  }
-
-  figma.ui.postMessage({ 
-    type: 'progress', 
-    title: 'Exporting AVIF…',
-    percent: 10, 
-    text: 'Reading original image…' 
-  });
-  const originalBytes = await figma.getImageByHash(imageHash).getBytesAsync();
-
-  figma.ui.postMessage({ 
-    type: 'progress', 
-    title: 'Exporting AVIF…',
-    percent: 30, 
-    text: `Exporting pixels @${scale}x…` 
-  });
-  // Export the visual as PNG to preserve alpha and get consistent pixels for encoder
-  const renderedPng = await (node as ExportMixin).exportAsync({ 
-    format: 'PNG',
-    constraint: { type: 'SCALE', value: scale }
-  });
-  const fileName = `${node.name || 'export'}@${scale}x.avif`;
-
-  figma.ui.postMessage({
-    type: 'process-avif',
-    original: originalBytes,
-    renderedPng,
     name: fileName
   });
 }
@@ -736,18 +667,6 @@ figma.ui.onmessage = async (msg) => {
     exportSelectedWithMetadata(scale, selectedImageHash).catch((err) => {
       figma.notify('Export failed. See console.');
       console.error('[Code] Export error:', err);
-    });
-  } else if (msg?.type === 'export-avif') {
-    if (!ENABLE_AVIF_EXPORT) {
-      figma.notify('AVIF export is disabled. See AVIF_FEATURE.md to enable.');
-      return;
-    }
-    const scale = msg.scale || 1;
-    const selectedImageHash = msg.selectedImageHash;
-    console.log('[Code] Starting AVIF export @' + scale + 'x', selectedImageHash ? `(using selected image)` : '');
-    exportSelectedForAvif(scale, selectedImageHash).catch((err) => {
-      figma.notify('AVIF export failed. See console.');
-      console.error('[Code] AVIF export error:', err);
     });
   } else if (msg?.type === 'close') {
     console.log('[Code] Closing plugin');

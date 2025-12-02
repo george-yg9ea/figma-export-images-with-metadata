@@ -1,29 +1,5 @@
 // UI logic: button to export, JPEG metadata merge, and download
 
-// ============================================================================
-// FEATURE FLAG: AVIF Export
-// ============================================================================
-// AVIF export is disabled by default due to performance limitations:
-// - 3-5x slower than native Figma exports (1-4 seconds vs <0.5 seconds)
-// - Cannot be fixed due to browser architecture limitations
-// - See AVIF_FEATURE.md for details and how to enable
-// ============================================================================
-const ENABLE_AVIF_EXPORT = true;
-
-// Conditionally import AVIF encoder only when feature is enabled
-// This prevents loading the 3.5MB WASM encoder when disabled
-// Dynamic import ensures it's only loaded when needed
-let avifEncoderLoaded = false;
-async function loadAvifEncoderIfNeeded() {
-  if (!ENABLE_AVIF_EXPORT || avifEncoderLoaded) return;
-  try {
-    await import('./avif-encoder-browser');
-    avifEncoderLoaded = true;
-  } catch (err) {
-    console.error('[UI] Failed to load AVIF encoder:', err);
-  }
-}
-
 function byId(id: string): HTMLElement {
   const el = document.getElementById(id);
   if (!el) throw new Error(`Missing element #${id}`);
@@ -32,42 +8,6 @@ function byId(id: string): HTMLElement {
 
 function setStatus(text: string) {
   byId('status').textContent = text;
-}
-
-// Progress indicator functions
-function showProgress(title: string, percent: number, text?: string): Promise<void> {
-  // Use requestAnimationFrame to ensure UI updates don't block
-  // Return a promise that resolves after the frame has rendered
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => {
-      try {
-        const indicator = byId('progress-indicator');
-        const titleEl = byId('progress-title');
-        const barFill = byId('progress-bar-fill');
-        const textEl = byId('progress-text');
-        
-        indicator.classList.add('active');
-        titleEl.textContent = title;
-        barFill.style.width = `${Math.min(100, Math.max(0, percent))}%`;
-        textEl.textContent = text || `${Math.round(percent)}%`;
-        
-        // Wait for the next frame to ensure the UI has actually rendered
-        requestAnimationFrame(() => {
-          resolve();
-        });
-      } catch (e) {
-        console.error('[UI] Error updating progress:', e);
-        resolve();
-      }
-    });
-  });
-}
-
-function hideProgress() {
-  const indicator = byId('progress-indicator');
-  indicator.classList.remove('active');
-  const barFill = byId('progress-bar-fill');
-  barFill.style.width = '0%';
 }
 
 function getSelectedScale(): number {
@@ -241,6 +181,319 @@ function mergeJpegMetadata(original: Uint8Array, rendered: Uint8Array): Uint8Arr
   return concatUint8(chunks);
 }
 
+// PNG chunk structure: [4-byte length][4-byte type][data][4-byte CRC]
+type PngChunk = { length: number; type: string; data: Uint8Array; crc: number; start: number; end: number };
+
+function parsePngChunks(bytes: Uint8Array): PngChunk[] {
+  // PNG signature: 89 50 4E 47 0D 0A 1A 0A
+  if (bytes.length < 8 || 
+      bytes[0] !== 0x89 || bytes[1] !== 0x50 || bytes[2] !== 0x4E || bytes[3] !== 0x47 ||
+      bytes[4] !== 0x0D || bytes[5] !== 0x0A || bytes[6] !== 0x1A || bytes[7] !== 0x0A) {
+    throw new Error('Not a PNG');
+  }
+  
+  const chunks: PngChunk[] = [];
+  let i = 8; // After PNG signature
+  
+  while (i + 12 <= bytes.length) {
+    const length = (bytes[i] << 24) | (bytes[i + 1] << 16) | (bytes[i + 2] << 8) | bytes[i + 3];
+    const typeBytes = bytes.subarray(i + 4, i + 8);
+    const type = String.fromCharCode(...typeBytes);
+    const dataStart = i + 8;
+    const dataEnd = dataStart + length;
+    const crcStart = dataEnd;
+    const crcEnd = crcStart + 4;
+    
+    if (crcEnd > bytes.length) break;
+    
+    const data = bytes.subarray(dataStart, dataEnd);
+    const crc = (bytes[crcStart] << 24) | (bytes[crcStart + 1] << 16) | 
+                (bytes[crcStart + 2] << 8) | bytes[crcStart + 3];
+    
+    chunks.push({ length, type, data, crc, start: i, end: crcEnd });
+    
+    if (type === 'IEND') break; // Last chunk
+    i = crcEnd;
+  }
+  
+  return chunks;
+}
+
+// Calculate CRC32 for PNG chunk
+function calculateCrc32(typeBytes: Uint8Array, data: Uint8Array): number {
+  const crcTable: number[] = [];
+  for (let i = 0; i < 256; i++) {
+    let crc = i;
+    for (let j = 0; j < 8; j++) {
+      crc = (crc & 1) ? (0xEDB88320 ^ (crc >>> 1)) : (crc >>> 1);
+    }
+    crcTable[i] = crc;
+  }
+  
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < typeBytes.length; i++) {
+    crc = crcTable[(crc ^ typeBytes[i]) & 0xFF] ^ (crc >>> 8);
+  }
+  for (let i = 0; i < data.length; i++) {
+    crc = crcTable[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+// Create a PNG chunk
+function createPngChunk(type: string, data: Uint8Array): Uint8Array {
+  const typeBytes = new Uint8Array(4);
+  for (let i = 0; i < 4; i++) {
+    typeBytes[i] = type.charCodeAt(i);
+  }
+  
+  const length = data.length;
+  const lengthBytes = new Uint8Array([
+    (length >>> 24) & 0xFF,
+    (length >>> 16) & 0xFF,
+    (length >>> 8) & 0xFF,
+    length & 0xFF
+  ]);
+  
+  const crc = calculateCrc32(typeBytes, data);
+  const crcBytes = new Uint8Array([
+    (crc >>> 24) & 0xFF,
+    (crc >>> 16) & 0xFF,
+    (crc >>> 8) & 0xFF,
+    crc & 0xFF
+  ]);
+  
+  return concatUint8([lengthBytes, typeBytes, data, crcBytes]);
+}
+
+// Extract EXIF from JPEG and convert to PNG eXIf chunk
+function extractExifForPng(jpegBytes: Uint8Array): Uint8Array | null {
+  if (jpegBytes.length < 2 || jpegBytes[0] !== 0xFF || jpegBytes[1] !== 0xD8) {
+    return null;
+  }
+  
+  let i = 2;
+  while (i + 4 <= jpegBytes.length) {
+    if (jpegBytes[i] !== 0xFF) { i++; continue; }
+    const marker = jpegBytes[i + 1];
+    i += 2;
+    if (marker === 0xDA || marker === 0xD9) break; // SOS or EOI
+    if (marker === 0x01 || (marker >= 0xD0 && marker <= 0xD7)) continue; // Standalone markers
+    if (i + 2 > jpegBytes.length) break;
+    
+    const len = (jpegBytes[i] << 8) | jpegBytes[i + 1];
+    if (marker === 0xE1) { // APP1
+      // Check for "Exif\0\0" header (6 bytes)
+      if (i + 8 <= jpegBytes.length) {
+        const header = String.fromCharCode(...jpegBytes.subarray(i + 2, i + 6));
+        if (header === 'Exif' && jpegBytes[i + 6] === 0x00 && jpegBytes[i + 7] === 0x00) {
+          // Extract EXIF data starting from TIFF header (after "Exif\0\0")
+          // PNG eXIf chunk should contain the full EXIF data including TIFF header
+          const exifData = jpegBytes.subarray(i + 8, i + len);
+          if (exifData.length > 0) {
+            return exifData;
+          }
+        }
+      }
+    }
+    i += len;
+  }
+  return null;
+}
+
+// Extract ICC from JPEG and convert to PNG iCCP chunk
+function extractIccForPng(jpegBytes: Uint8Array): Uint8Array | null {
+  if (jpegBytes.length < 2 || jpegBytes[0] !== 0xFF || jpegBytes[1] !== 0xD8) {
+    return null;
+  }
+  
+  let i = 2;
+  while (i + 4 <= jpegBytes.length) {
+    if (jpegBytes[i] !== 0xFF) { i++; continue; }
+    const marker = jpegBytes[i + 1];
+    i += 2;
+    if (marker === 0xDA || marker === 0xD9) break;
+    if (marker === 0x01 || (marker >= 0xD0 && marker <= 0xD7)) continue;
+    if (i + 2 > jpegBytes.length) break;
+    
+    const len = (jpegBytes[i] << 8) | jpegBytes[i + 1];
+    if (marker === 0xE2) { // APP2 (ICC)
+      const header = String.fromCharCode(...jpegBytes.subarray(i + 2, i + 14));
+      if (header.startsWith('ICC_PROFILE')) {
+        // Extract ICC data (skip "ICC_PROFILE\0" header)
+        const iccData = jpegBytes.subarray(i + 14, i + len);
+        return iccData;
+      }
+    }
+    i += len;
+  }
+  return null;
+}
+
+// Extract XMP from JPEG and convert to PNG iTXt chunk
+function extractXmpForPng(jpegBytes: Uint8Array): Uint8Array | null {
+  if (jpegBytes.length < 2 || jpegBytes[0] !== 0xFF || jpegBytes[1] !== 0xD8) {
+    return null;
+  }
+  
+  let i = 2;
+  while (i + 4 <= jpegBytes.length) {
+    if (jpegBytes[i] !== 0xFF) { i++; continue; }
+    const marker = jpegBytes[i + 1];
+    i += 2;
+    if (marker === 0xDA || marker === 0xD9) break;
+    if (marker === 0x01 || (marker >= 0xD0 && marker <= 0xD7)) continue;
+    if (i + 2 > jpegBytes.length) break;
+    
+    const len = (jpegBytes[i] << 8) | jpegBytes[i + 1];
+    if (marker === 0xE1) { // APP1
+      const segment = jpegBytes.subarray(i + 2, i + len);
+      if (segment.length >= 29) {
+        const header = String.fromCharCode(...segment.subarray(0, Math.min(100, segment.length)));
+        if (header.includes('http://ns.adobe.com/xap/1.0/') || 
+            header.includes('<?xpacket') ||
+            header.includes('x:xmpmeta')) {
+          // Extract XMP XML data
+          // Find XML start (skip any padding)
+          let xmlStart = 0;
+          for (let j = 0; j < segment.length - 4; j++) {
+            if (segment[j] === 0x3C && segment[j + 1] === 0x3F && 
+                segment[j + 2] === 0x78 && segment[j + 3] === 0x6D) {
+              xmlStart = j;
+              break;
+            }
+          }
+          // Find XML end (null terminator or end of segment)
+          let xmlEnd = segment.length;
+          for (let j = xmlStart; j < segment.length; j++) {
+            if (segment[j] === 0) {
+              xmlEnd = j;
+              break;
+            }
+          }
+          return segment.subarray(xmlStart, xmlEnd);
+        }
+      }
+    }
+    i += len;
+  }
+  return null;
+}
+
+function mergePngMetadata(original: Uint8Array, rendered: Uint8Array): Uint8Array {
+  try {
+    // Parse PNG chunks from rendered image
+    const chunks = parsePngChunks(rendered);
+    
+    // Extract metadata from original JPEG
+    const exifData = extractExifForPng(original);
+    const iccData = extractIccForPng(original);
+    const xmpData = extractXmpForPng(original);
+    
+    // Debug logging
+    console.log('[PNG Metadata] EXIF data length:', exifData?.length || 0);
+    console.log('[PNG Metadata] XMP data length:', xmpData?.length || 0);
+    console.log('[PNG Metadata] ICC data length:', iccData?.length || 0);
+    
+    // If no metadata found, return rendered as-is
+    if (!exifData && !xmpData && !iccData) {
+      console.warn('[PNG Metadata] No metadata found in original JPEG');
+      return rendered;
+    }
+    
+    // Find where to insert metadata chunks (after IHDR, before IDAT)
+    let insertIndex = -1;
+    for (let i = 0; i < chunks.length; i++) {
+      if (chunks[i].type === 'IHDR') {
+        insertIndex = i + 1;
+        break;
+      }
+    }
+    if (insertIndex === -1) {
+      console.warn('[PNG Metadata] No IHDR chunk found');
+      return rendered;
+    }
+    
+    // Find IDAT chunks to ensure we insert before them
+    for (let i = insertIndex; i < chunks.length; i++) {
+      if (chunks[i].type === 'IDAT') {
+        insertIndex = i;
+        break;
+      }
+    }
+    
+    // Build new PNG file
+    const pngSignature = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    const newChunks: Uint8Array[] = [pngSignature];
+    
+    // Add chunks before insertion point
+    for (let i = 0; i < insertIndex; i++) {
+      const chunk = chunks[i];
+      newChunks.push(rendered.subarray(chunk.start, chunk.end));
+    }
+    
+    // Insert metadata chunks
+    if (exifData && exifData.length > 0) {
+      // PNG eXIf chunk (EXIF in PNG extension)
+      // eXIf contains EXIF data starting from TIFF header (after "Exif\0\0")
+      try {
+        const exifChunk = createPngChunk('eXIf', exifData);
+        newChunks.push(exifChunk);
+        console.log('[PNG Metadata] Added eXIf chunk, size:', exifChunk.length);
+      } catch (e) {
+        console.error('[PNG Metadata] Failed to create eXIf chunk:', e);
+      }
+    }
+    
+    if (iccData && iccData.length > 0) {
+      // PNG iCCP chunk (ICC profile)
+      // Format: [profile name (null-terminated)][compression method (1 byte)][compressed data]
+      // Note: iCCP requires deflate compression, which is complex to implement in browser
+      // For now, we'll skip iCCP and note that ICC profiles may not be preserved in PNG
+      // Most image viewers will still display the image correctly without the profile
+      // TODO: Implement deflate compression for iCCP if ICC profile preservation is critical
+      console.log('[PNG Metadata] ICC data found but not injected (requires deflate compression)');
+    }
+    
+    if (xmpData && xmpData.length > 0) {
+      // PNG iTXt chunk for XMP
+      // Format: [keyword (null-terminated)][compression flag (1 byte)][compression method (1 byte)][language tag (null-terminated)][translated keyword (null-terminated)][text]
+      try {
+        const keyword = 'XML:com.adobe.xmp';
+        const keywordBytes = new TextEncoder().encode(keyword);
+        const itxtData = new Uint8Array(keywordBytes.length + 1 + 1 + 1 + 1 + xmpData.length);
+        let offset = 0;
+        itxtData.set(keywordBytes, offset);
+        offset += keywordBytes.length;
+        itxtData[offset++] = 0; // Null terminator
+        itxtData[offset++] = 0; // Compression flag: 0 = uncompressed
+        itxtData[offset++] = 0; // Compression method (unused if flag is 0)
+        itxtData[offset++] = 0; // Language tag: empty (null terminator)
+        itxtData[offset++] = 0; // Translated keyword: empty (null terminator)
+        itxtData.set(xmpData, offset);
+        const xmpChunk = createPngChunk('iTXt', itxtData);
+        newChunks.push(xmpChunk);
+        console.log('[PNG Metadata] Added iTXt chunk for XMP, size:', xmpChunk.length);
+      } catch (e) {
+        console.error('[PNG Metadata] Failed to create iTXt chunk:', e);
+      }
+    }
+    
+    // Add remaining chunks (IDAT, IEND, etc.)
+    for (let i = insertIndex; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      newChunks.push(rendered.subarray(chunk.start, chunk.end));
+    }
+    
+    const result = concatUint8(newChunks);
+    console.log('[PNG Metadata] Merged PNG size:', result.length, 'Original size:', rendered.length);
+    return result;
+  } catch (e) {
+    console.error('[PNG Metadata] Error merging metadata:', e);
+    return rendered; // Return original on error
+  }
+}
+
 function downloadBytes(bytes: Uint8Array, name: string, mime: string) {
   const blob = new Blob([bytes], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -289,19 +542,6 @@ window.onmessage = async (event) => {
       setStatus('Failed to merge metadata. Exported plain JPEG instead.');
       const fallback = new Uint8Array(msg.rendered);
       downloadBytes(fallback, msg.name || 'export.jpg', 'image/jpeg');
-    }
-  } else if (msg.type === 'process-avif') {
-    if (!ENABLE_AVIF_EXPORT) {
-      setStatus('AVIF export is disabled. See AVIF_FEATURE.md to enable.');
-      return;
-    }
-    encodeAvifWithMetadata(msg);
-  } else if (msg.type === 'progress') {
-    // Update progress indicator
-    if (msg.percent !== undefined) {
-      showProgress(msg.title || 'Exporting AVIF…', msg.percent, msg.text);
-    } else {
-      hideProgress();
     }
   } else if (msg.type === 'check-selection') {
     // Re-check selection when it changes
@@ -612,15 +852,7 @@ function escapeHtml(text: string): string {
   parent.postMessage({ pluginMessage: { type: 'check-multiple-fills' } }, '*');
   
   const exportBtn = byId('export');
-  const exportAvifBtn = byId('export-avif');
   const closeBtn = byId('close');
-  
-  // Show/hide AVIF button based on feature flag
-  if (ENABLE_AVIF_EXPORT) {
-    exportAvifBtn.style.display = '';
-  } else {
-    exportAvifBtn.style.display = 'none';
-  }
   
         exportBtn.addEventListener('click', async () => {
           // Re-check selection before exporting (in case it changed)
@@ -640,211 +872,10 @@ function escapeHtml(text: string): string {
     }, '*');
   });
   
-        exportAvifBtn.addEventListener('click', () => {
-          // Schedule all work asynchronously to prevent UI freezing
-    // This allows the browser to render the progress indicator first
-    setTimeout(async () => {
-      if (!ENABLE_AVIF_EXPORT) {
-        setStatus('AVIF export is disabled. See AVIF_FEATURE.md to enable.');
-        return;
-      }
-      
-      // Show progress indicator immediately and wait for it to render
-      await showProgress('Exporting AVIF…', 0, 'Preparing…');
-      
-      // Load encoder if not already loaded
-      await loadAvifEncoderIfNeeded();
-      
-      // Check if encoder is available
-      if (!(window as any).AVIF || typeof (window as any).AVIF.encode !== 'function') {
-        console.error('[UI] AVIF encoder not available');
-        hideProgress();
-        setStatus('AVIF encoder not found. This is optional - JPEG export works without it.');
-        parent.postMessage({ pluginMessage: { type: 'notify', message: 'AVIF encoder not available. AVIF export is disabled.' } }, '*');
-        return;
-      }
-          
-          const scale = getSelectedScale();
-          
-          await showProgress('Exporting AVIF…', 5, 'Starting export…');
-      
-      // Now start the export
-      parent.postMessage({ 
-        pluginMessage: { 
-          type: 'export-avif', 
-          scale,
-          selectedImageHash: selectedImageHash || undefined
-        } 
-      }, '*');
-    }, 0);
-  });
-  
         closeBtn.addEventListener('click', () => {
           parent.postMessage({ pluginMessage: { type: 'close' } }, '*');
         });
       });
-
-// Helper function to yield control to browser for UI updates
-async function yieldToBrowser() {
-  return new Promise(resolve => setTimeout(resolve, 0));
-}
-
-// Receive pixel bytes and original metadata, then encode AVIF
-async function encodeAvifWithMetadata(payload: any) {
-  try {
-    await showProgress('Exporting AVIF…', 0, 'Preparing…');
-    
-    // @ts-ignore
-    const AVIF = (window as any).AVIF;
-    if (!AVIF || !AVIF.encode) throw new Error('AVIF encoder not available');
-    
-    await showProgress('Exporting AVIF…', 20, 'Reading image data…');
-    
-    const rendered = new Uint8Array(payload.renderedPng);
-    const original = new Uint8Array(payload.original);
-    
-    // Validate PNG input
-    if (!rendered || rendered.length === 0) {
-      throw new Error('Rendered PNG data is empty');
-    }
-    
-    // Check PNG signature (should start with 89 50 4E 47)
-    if (rendered.length < 8 || 
-        rendered[0] !== 0x89 || rendered[1] !== 0x50 || 
-        rendered[2] !== 0x4E || rendered[3] !== 0x47) {
-      throw new Error('Invalid PNG data received from Figma');
-    }
-
-    await showProgress('Exporting AVIF…', 40, 'Extracting metadata…');
-    
-    // Extract metadata blobs from original JPEG if available
-    const exif = extractExif(original);
-    const xmp = extractXmp(original);
-    const icc = extractIcc(original);
-
-    await showProgress('Exporting AVIF…', 60, 'Encoding AVIF…');
-    
-    // Use speed=8 for faster encoding (0-10 scale, where 10 is fastest)
-    // This trades some quality for significant speed improvement
-    // Speed 8 is still good quality but encodes ~3-5x faster than speed 5
-    
-    // Simulate progress during encoding (since WASM doesn't provide callbacks)
-    // Use requestAnimationFrame for smoother updates that don't block
-    let encodingProgress = 60;
-    let progressUpdateScheduled = false;
-    let encodingComplete = false;
-    
-    const scheduleProgressUpdate = () => {
-      if (!progressUpdateScheduled && encodingProgress < 95 && !encodingComplete) {
-        progressUpdateScheduled = true;
-        requestAnimationFrame(() => {
-          if (encodingComplete) {
-            progressUpdateScheduled = false;
-            return;
-          }
-          encodingProgress = Math.min(95, encodingProgress + 1);
-          showProgress('Exporting AVIF…', encodingProgress, 'Encoding AVIF…'); // Don't await - let it run in background
-          progressUpdateScheduled = false;
-          if (encodingProgress < 95 && !encodingComplete) {
-            setTimeout(scheduleProgressUpdate, 100);
-          }
-        });
-      }
-    };
-    
-    // Start progress updates
-    scheduleProgressUpdate();
-    
-    // Perform the actual encoding
-    let result: Uint8Array;
-    try {
-      const encoded = await AVIF.encode(rendered, {
-        quality: 50,
-        speed: 8, // Faster encoding (0-10, where 10 is fastest)
-        exif,
-        xmp,
-        icc
-      });
-      
-      // Ensure we have a valid Uint8Array
-      if (!encoded || encoded.length === 0) {
-        throw new Error('AVIF encoding returned empty result');
-      }
-      
-      result = encoded instanceof Uint8Array ? encoded : new Uint8Array(encoded);
-      
-      // Validate AVIF file signature (should start with ftyp box)
-      // AVIF files start with a 4-byte size, then 'ftyp'
-      if (result.length < 12) {
-        throw new Error('AVIF file too small to be valid');
-      }
-      
-      // Check for 'ftyp' at offset 4 (after 4-byte size)
-      const ftypCheck = String.fromCharCode(result[4], result[5], result[6], result[7]);
-      if (ftypCheck !== 'ftyp') {
-        // Some encoders might structure differently, but log for debugging if needed
-      }
-    } catch (encodeError) {
-      console.error('[UI] AVIF encoding failed:', encodeError);
-      throw encodeError;
-    }
-    
-    // Stop progress updates
-    encodingComplete = true;
-    
-    // Show "Finalizing..." and wait for it to render
-    await showProgress('Exporting AVIF…', 98, 'Finalizing…');
-    
-    // Show "Complete" status and wait for it to actually render
-    await showProgress('Exporting AVIF…', 100, 'Complete');
-    
-    // Wait longer to ensure "Complete" is fully visible before download dialog appears
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    // Now trigger download - this will show the file save dialog
-    downloadBytes(result, payload.name || 'export.avif', 'image/avif');
-    
-    // Keep "Complete" visible for a moment so user sees it when download dialog appears
-    // Then hide after download dialog has appeared
-    setTimeout(() => {
-      hideProgress();
-      setStatus('File download started.');
-    }, 1000);
-  } catch (e) {
-    console.error(e);
-    hideProgress();
-    setStatus('AVIF encode failed.');
-  }
-}
-
-function extractExif(bytes: Uint8Array): Uint8Array | undefined { try { return extractAppSegment(bytes, 0xe1); } catch { return undefined; } }
-function extractXmp(bytes: Uint8Array): Uint8Array | undefined { try { return extractAppSegment(bytes, 0xe1, true); } catch { return undefined; } }
-function extractIcc(bytes: Uint8Array): Uint8Array | undefined { try { return extractAppSegment(bytes, 0xe2); } catch { return undefined; } }
-
-function extractAppSegment(bytes: Uint8Array, marker: number, xmp = false): Uint8Array | undefined {
-  // Simple JPEG APPn scan similar to parseJpegSegments
-  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return undefined;
-  let i = 2;
-  while (i + 4 <= bytes.length) {
-    if (bytes[i] !== 0xff) { i++; continue; }
-    const m = bytes[i + 1]; i += 2;
-    if (m === 0xda || m === 0xd9) break;
-    if (m === 0x01 || (m >= 0xd0 && m <= 0xd7)) continue;
-    if (i + 2 > bytes.length) break;
-    const len = (bytes[i] << 8) | bytes[i + 1];
-    const start = i + 2; // skip length
-    const end = i + len;
-    if (m === marker) {
-      const segment = bytes.subarray(start, end);
-      if (!xmp) return segment;
-      // For XMP, ensure it contains the XMP header
-      const header = new TextDecoder().decode(segment.subarray(0, 29));
-      if (header.includes('http://ns.adobe.com/xap/1.0/')) return segment;
-    }
-    i = end;
-  }
-  return undefined;
-}
 
 // Message handler is already set above with window.onmessage
 

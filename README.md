@@ -2,7 +2,7 @@
 
 Export cropped/resized images while retaining the original JPEG metadata (EXIF/XMP/IPTC) by merging it back into the rendered export.
 
-Current focus: JPEG. PNG support is not included in v0.1.
+**Current focus:** JPEG export with full metadata preservation.
 
 ## Install & Build
 
@@ -35,19 +35,7 @@ Notes:
 
 ## Roadmap
 - Optional rewrite of EXIF ImageWidth/ImageLength to match the cropped export.
-- Optional PNG metadata passthrough (eXIf/iTXt/ICC).
 - Batch export for multiple selections.
-
-### AVIF Export (Beta) - **DISABLED BY DEFAULT**
-
-The plugin includes AVIF export functionality, but it is **disabled by default** due to performance limitations (3-5x slower than native Figma exports). 
-
-**Status:**
-- ✅ Feature is implemented and functional
-- ⚠️ Disabled by default due to performance constraints
-- 📖 See `AVIF_FEATURE.md` for details and how to enable it for testing
-
-**For production AVIF needs:** Export JPEG from the plugin, then use a separate batch conversion script with native tools (5-10x faster).
 
 ## Limitations
 - Depends on Figma exposing original bytes with metadata for the image hash; behavior can vary based on how the image entered the file.

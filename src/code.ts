@@ -32,19 +32,8 @@ async function checkAndSendFillInfo() {
     return;
   }
   
-  if (imageFills.length === 1) {
-    // Single fill - proceed normally and load metadata
-    const imageHash = imageFills[0].imageHash;
-    figma.ui.postMessage({ type: 'single-fill', imageHash, nodeName: node.name });
-    // Load metadata for single image
-    loadAndSendMetadata(imageHash).catch(err => {
-      console.error('[Code] Error loading metadata:', err);
-    });
-    return;
-  }
-  
-  // Multiple fills - get thumbnails and send to UI for selection
-  console.log(`[Code] Found ${imageFills.length} image fills, generating thumbnails...`);
+  // Always get thumbnails and show them, even for single image
+  console.log(`[Code] Found ${imageFills.length} image fill(s), generating thumbnails...`);
   figma.ui.postMessage({ type: 'status', message: 'Generating thumbnails…' });
   
   try {
@@ -64,7 +53,8 @@ async function checkAndSendFillInfo() {
     console.log(`[Code] Sending ${imagesData.length} images to UI`);
     figma.ui.postMessage({
       type: 'multiple-fills',
-      images: imagesData
+      images: imagesData,
+      nodeName: node.name
     });
     
     // Load metadata for topmost image (default selection)
@@ -676,6 +666,25 @@ figma.ui.onmessage = async (msg) => {
   } else if (msg?.type === 'close') {
     console.log('[Code] Closing plugin');
     figma.closePlugin();
+  } else if (msg?.type === 'rename-layer') {
+    if (figma.currentPage.selection.length === 0) {
+      figma.notify('No layer selected.');
+      return;
+    }
+    const node = figma.currentPage.selection[0];
+    const newName = msg.newName;
+    if (newName && typeof newName === 'string') {
+      node.name = newName;
+      figma.ui.postMessage({ 
+        type: 'layer-renamed', 
+        newName: newName 
+      });
+      // Also update the export button text
+      figma.ui.postMessage({ 
+        type: 'update-export-button', 
+        nodeName: newName 
+      });
+    }
   } else if (msg?.type === 'notify') {
     figma.notify(msg.message || '');
   } else {

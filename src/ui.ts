@@ -12,11 +12,45 @@ function setStatus(text: string) {
 
 function updateExportButtonText(nodeName: string | null | undefined) {
   const exportBtn = byId('export');
+  exportBtn.textContent = 'Export';
+}
+
+function updateLayerNameInput(nodeName: string | null | undefined) {
+  const layerNameInput = byId('layer-name-input') as HTMLInputElement;
+  const renameBtn = byId('rename-layer');
+  
   if (nodeName) {
-    exportBtn.textContent = `Export ${nodeName}`;
+    layerNameInput.value = nodeName;
+    originalLayerName = nodeName;
+    renameBtn.classList.add('hidden');
   } else {
-    exportBtn.textContent = 'Export';
+    layerNameInput.value = '';
+    originalLayerName = null;
+    renameBtn.classList.add('hidden');
   }
+}
+
+function handleRenameLayer() {
+  const layerNameInput = byId('layer-name-input') as HTMLInputElement;
+  const newName = layerNameInput.value.trim();
+  
+  if (!newName) {
+    return; // Don't rename to empty
+  }
+  
+  if (newName === originalLayerName) {
+    // No change, hide the button
+    byId('rename-layer').classList.add('hidden');
+    return;
+  }
+  
+  // Send rename message to code.ts
+  parent.postMessage({ 
+    pluginMessage: { 
+      type: 'rename-layer', 
+      newName: newName 
+    } 
+  }, '*');
 }
 
 function getSelectedScale(): number {
@@ -26,13 +60,26 @@ function getSelectedScale(): number {
 
 // Store selected image hash for metadata source
 let selectedImageHash: string | null = null;
+// Store original layer name for rename functionality
+let originalLayerName: string | null = null;
 
 function showThumbnailSelection(images: Array<{ hash: string; index: number; thumbnail?: number[] }>) {
   const container = byId('thumbnail-selection');
   const grid = byId('thumbnail-grid');
+  const title = byId('thumbnail-title');
+  const description = byId('thumbnail-description');
   
   container.style.display = 'block';
   grid.innerHTML = '';
+  
+  // Update text based on number of images
+  if (images.length === 1) {
+    title.textContent = 'Image preview';
+    description.textContent = '';
+  } else {
+    title.textContent = 'Multiple images detected';
+    description.textContent = 'Select which image\'s metadata to use:';
+  }
   
   images.forEach((img, idx) => {
     const item = document.createElement('div');
@@ -209,32 +256,56 @@ window.onmessage = async (event) => {
   
   if (msg.type === 'status') {
     setStatus(msg.message || '');
-  } else if (msg.type === 'single-fill') {
-    // Single image fill - hide thumbnail selection and proceed normally
-    hideThumbnailSelection();
-    selectedImageHash = msg.imageHash;
-    // Update button text with node name
-    updateExportButtonText(msg.nodeName);
-    // Metadata will be loaded automatically by code.ts
   } else if (msg.type === 'multiple-fills') {
     // Multiple image fills - show thumbnail selection
     showThumbnailSelection(msg.images || []);
+    // Hide instruction text
+    const instructionText = byId('instruction-text');
+    instructionText.style.display = 'none';
+    document.body.style.minHeight = 'auto';
+    document.body.classList.add('has-content');
+    // Show sticky bar with export controls
+    byId('sticky-bar').classList.add('visible');
     // Update button text with node name if available
     if (msg.nodeName) {
       updateExportButtonText(msg.nodeName);
+      updateLayerNameInput(msg.nodeName);
     }
   } else if (msg.type === 'no-selection') {
     hideThumbnailSelection();
     hideMetadataDisplay();
     setStatus('');
+    // Show instruction text
+    const instructionText = byId('instruction-text');
+    instructionText.style.display = 'flex';
+    document.body.style.minHeight = '100vh';
+    document.body.classList.remove('has-content');
+    // Hide sticky bar
+    byId('sticky-bar').classList.remove('visible');
     updateExportButtonText(null);
+    updateLayerNameInput(null);
   } else if (msg.type === 'no-image-fills') {
     hideThumbnailSelection();
     hideMetadataDisplay();
     setStatus('Selected node does not have an image fill.');
+    // Show instruction text
+    const instructionText = byId('instruction-text');
+    instructionText.style.display = 'flex';
+    document.body.style.minHeight = '100vh';
+    document.body.classList.remove('has-content');
+    // Hide sticky bar
+    byId('sticky-bar').classList.remove('visible');
     updateExportButtonText(null);
+    updateLayerNameInput(null);
   } else if (msg.type === 'update-export-button') {
     updateExportButtonText(msg.nodeName);
+    updateLayerNameInput(msg.nodeName);
+  } else if (msg.type === 'layer-renamed') {
+    // Layer was successfully renamed, update the original name
+    originalLayerName = msg.newName;
+    updateExportButtonText(msg.newName);
+    byId('rename-layer').classList.add('hidden');
+    setStatus('Layer renamed successfully.');
   } else if (msg.type === 'process-jpeg') {
     try {
       setStatus('Merging metadata…');
@@ -558,6 +629,33 @@ function escapeHtml(text: string): string {
   parent.postMessage({ pluginMessage: { type: 'check-multiple-fills' } }, '*');
   
   const exportBtn = byId('export');
+  const layerNameInput = byId('layer-name-input') as HTMLInputElement;
+  const renameBtn = byId('rename-layer');
+  
+  // Handle layer name input changes
+  layerNameInput.addEventListener('input', () => {
+    const currentValue = layerNameInput.value.trim();
+    if (currentValue && currentValue !== originalLayerName) {
+      // Show rename button if name has changed
+      renameBtn.classList.remove('hidden');
+    } else {
+      // Hide rename button if name is same as original or empty
+      renameBtn.classList.add('hidden');
+    }
+  });
+  
+  // Handle Enter key press in layer name input
+  layerNameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleRenameLayer();
+    }
+  });
+  
+  // Handle rename button click
+  renameBtn.addEventListener('click', () => {
+    handleRenameLayer();
+  });
   
         exportBtn.addEventListener('click', async () => {
           // Re-check selection before exporting (in case it changed)

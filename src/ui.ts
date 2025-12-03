@@ -16,51 +16,46 @@ function updateExportButtonText(nodeName: string | null | undefined) {
 }
 
 function updateLayerNameInput(nodeName: string | null | undefined) {
-  const layerNameInput = byId('layer-name-input') as HTMLInputElement;
-  const renameBtn = byId('rename-layer');
-  
-  if (nodeName) {
-    layerNameInput.value = nodeName;
-    originalLayerName = nodeName;
-    renameBtn.classList.add('hidden');
-  } else {
-    layerNameInput.value = '';
-    originalLayerName = null;
-    renameBtn.classList.add('hidden');
-  }
+  // Layer name input removed - function kept for compatibility but does nothing
 }
 
 function handleRenameLayer() {
-  const layerNameInput = byId('layer-name-input') as HTMLInputElement;
-  const newName = layerNameInput.value.trim();
-  
-  if (!newName) {
-    return; // Don't rename to empty
-  }
-  
-  if (newName === originalLayerName) {
-    // No change, hide the button
-    byId('rename-layer').classList.add('hidden');
-    return;
-  }
-  
-  // Send rename message to code.ts
-  parent.postMessage({ 
-    pluginMessage: { 
-      type: 'rename-layer', 
-      newName: newName 
-    } 
-  }, '*');
+  // Layer rename feature removed - function kept for compatibility but does nothing
 }
 
-function getSelectedScale(): number {
-  const scaleSelect = document.getElementById('scale-select') as HTMLSelectElement;
-  return scaleSelect ? parseInt(scaleSelect.value, 10) : 2;
+function getExportSettings(): { type: 'scale' | 'width' | 'height'; value: number } {
+  const scaleInput = document.getElementById('scale-input') as HTMLInputElement;
+  const inputValue = scaleInput ? scaleInput.value.trim().toLowerCase() : '2x';
+  
+  // Parse input value
+  // 1x, 2x -> scale
+  // 512w -> width
+  // 512h -> height
+  if (inputValue.endsWith('x')) {
+    const scale = parseFloat(inputValue.replace('x', ''));
+    if (!isNaN(scale) && scale > 0) {
+      return { type: 'scale', value: scale };
+    }
+  } else if (inputValue.endsWith('w')) {
+    const width = parseFloat(inputValue.replace('w', ''));
+    if (!isNaN(width) && width > 0) {
+      return { type: 'width', value: width };
+    }
+  } else if (inputValue.endsWith('h')) {
+    const height = parseFloat(inputValue.replace('h', ''));
+    if (!isNaN(height) && height > 0) {
+      return { type: 'height', value: height };
+    }
+  }
+  
+  // Default to 2x if parsing fails
+  return { type: 'scale', value: 2 };
 }
 
 // Store selected image hash for metadata source
 let selectedImageHash: string | null = null;
 // Store original layer name for rename functionality
+// Layer rename feature removed - variable kept for compatibility
 let originalLayerName: string | null = null;
 
 function showThumbnailSelection(images: Array<{ hash: string; index: number; thumbnail?: number[] }>) {
@@ -86,9 +81,12 @@ function showThumbnailSelection(images: Array<{ hash: string; index: number; thu
     item.className = 'thumbnail-item';
     item.dataset.hash = img.hash;
     
-    // Select first image by default (topmost)
-    if (idx === images.length - 1) {
+    // Select first image by default (topmost) - only if multiple images
+    if (images.length > 1 && idx === images.length - 1) {
       item.classList.add('selected');
+      selectedImageHash = img.hash;
+    } else if (images.length === 1) {
+      // For single image, set hash but don't add selected class
       selectedImageHash = img.hash;
     }
     
@@ -105,7 +103,12 @@ function showThumbnailSelection(images: Array<{ hash: string; index: number; thu
     
     const label = document.createElement('div');
     label.className = 'label';
-    label.textContent = `Image ${img.index}${idx === images.length - 1 ? ' (topmost)' : ''}`;
+    // Only show label if there are multiple images
+    if (images.length > 1) {
+      label.textContent = `Image ${img.index}${idx === images.length - 1 ? ' (topmost)' : ''}`;
+    } else {
+      label.textContent = '';
+    }
     
     item.appendChild(imgEl);
     item.appendChild(label);
@@ -628,52 +631,153 @@ function escapeHtml(text: string): string {
         // Check for multiple fills when plugin loads
   parent.postMessage({ pluginMessage: { type: 'check-multiple-fills' } }, '*');
   
-  const exportBtn = byId('export');
-  const layerNameInput = byId('layer-name-input') as HTMLInputElement;
-  const renameBtn = byId('rename-layer');
-  
-  // Handle layer name input changes
-  layerNameInput.addEventListener('input', () => {
-    const currentValue = layerNameInput.value.trim();
-    if (currentValue && currentValue !== originalLayerName) {
-      // Show rename button if name has changed
-      renameBtn.classList.remove('hidden');
-    } else {
-      // Hide rename button if name is same as original or empty
-      renameBtn.classList.add('hidden');
-    }
-  });
-  
-  // Handle Enter key press in layer name input
-  layerNameInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleRenameLayer();
-    }
-  });
-  
-  // Handle rename button click
-  renameBtn.addEventListener('click', () => {
-    handleRenameLayer();
-  });
-  
-        exportBtn.addEventListener('click', async () => {
-          // Re-check selection before exporting (in case it changed)
-          parent.postMessage({ pluginMessage: { type: 'check-multiple-fills' } }, '*');
+  try {
+    const exportBtn = byId('export');
+    const scaleInput = document.getElementById('scale-input') as HTMLInputElement;
+    const scalePreset = document.getElementById('scale-preset') as HTMLSelectElement;
+    
+    // Preset values for reference
+    const presetValues = ['0.5x', '0.75x', '1x', '1.5x', '2x', '3x', '4x', '512w', '512h'];
+    
+    // Function to sync select with input value
+    function syncSelectWithInput() {
+      if (scaleInput && scalePreset) {
+        const inputValue = scaleInput.value.trim();
+        
+        // Check if input value is a preset
+        const isPreset = presetValues.includes(inputValue);
+        
+        // First, clean up: remove ALL custom options and separators
+        // We'll rebuild them if needed
+        for (let i = scalePreset.options.length - 1; i >= 0; i--) {
+          const option = scalePreset.options[i];
+          const optionValue = option.value;
+          // Remove separator or any non-preset option (regardless of inputValue)
+          if (optionValue === '---separator---' || !presetValues.includes(optionValue)) {
+            scalePreset.removeChild(option);
+          } else {
+            // Remove checkmarks from preset options
+            const optionText = option.textContent || optionValue;
+            const cleanText = optionText.replace(/^✓\s*/, '');
+            option.textContent = cleanText;
+          }
+        }
+        
+        // If it's a custom value (not in presets) and not empty
+        if (!isPreset && inputValue !== '') {
+          // Add custom option as first item (only if it doesn't already exist)
+          let customExists = false;
+          for (let i = 0; i < scalePreset.options.length; i++) {
+            if (scalePreset.options[i].value === inputValue) {
+              customExists = true;
+              break;
+            }
+          }
           
-          // Small delay to allow check to complete if needed
-          await new Promise(resolve => setTimeout(resolve, 200));
+          if (!customExists) {
+            const customOption = document.createElement('option');
+            customOption.value = inputValue;
+            customOption.textContent = inputValue;
+            scalePreset.insertBefore(customOption, scalePreset.firstChild);
+          }
           
-          const scale = getSelectedScale();
-          setStatus('Exporting…');
-    parent.postMessage({ 
-      pluginMessage: { 
-        type: 'export', 
-        scale,
-        selectedImageHash: selectedImageHash || undefined
-      } 
-    }, '*');
-  });
+          // Add separator after custom option (only if it doesn't exist)
+          let separatorExists = false;
+          for (let i = 0; i < scalePreset.options.length; i++) {
+            if (scalePreset.options[i].value === '---separator---') {
+              separatorExists = true;
+              break;
+            }
+          }
+          
+          if (!separatorExists) {
+            const separator = document.createElement('option');
+            separator.value = '---separator---';
+            separator.textContent = '──────────';
+            separator.disabled = true;
+            separator.style.background = '#f5f5f5';
+            // Find the position after the custom option
+            const customIndex = Array.from(scalePreset.options).findIndex(opt => opt.value === inputValue);
+            if (customIndex >= 0 && customIndex < scalePreset.options.length - 1) {
+              scalePreset.insertBefore(separator, scalePreset.options[customIndex + 1]);
+            } else {
+              scalePreset.appendChild(separator);
+            }
+          }
+          
+          // Select the custom option
+          for (let i = 0; i < scalePreset.options.length; i++) {
+            if (scalePreset.options[i].value === inputValue) {
+              scalePreset.selectedIndex = i;
+              break;
+            }
+          }
+        } else {
+          // Find matching preset option and select it
+          for (let i = 0; i < scalePreset.options.length; i++) {
+            const option = scalePreset.options[i];
+            if (option.value === inputValue) {
+              scalePreset.selectedIndex = i;
+              return;
+            }
+          }
+          
+          // If no match found, select the first option
+          if (scalePreset.options.length > 0) {
+            scalePreset.selectedIndex = 0;
+          }
+        }
+      }
+    }
+    
+    // Sync select when input changes
+    if (scaleInput) {
+      scaleInput.addEventListener('input', syncSelectWithInput);
+      scaleInput.addEventListener('change', syncSelectWithInput);
+    }
+    
+    // Handle preset dropdown selection
+    if (scalePreset) {
+      scalePreset.addEventListener('change', () => {
+        if (scalePreset.value) {
+          scaleInput.value = scalePreset.value;
+          // Keep the selection so checkmark shows
+        } else {
+          syncSelectWithInput();
+        }
+      });
+    }
+    
+    // Initial sync
+    syncSelectWithInput();
+    
+    exportBtn.addEventListener('click', async () => {
+      try {
+        console.log('[UI] Export button clicked');
+        // Re-check selection before exporting (in case it changed)
+        parent.postMessage({ pluginMessage: { type: 'check-multiple-fills' } }, '*');
+        
+        // Small delay to allow check to complete if needed
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        const exportSettings = getExportSettings();
+        console.log('[UI] Exporting with settings:', exportSettings);
+        setStatus('Exporting…');
+        parent.postMessage({ 
+          pluginMessage: { 
+            type: 'export', 
+            exportSettings,
+            selectedImageHash: selectedImageHash || undefined
+          } 
+        }, '*');
+      } catch (err) {
+        console.error('[UI] Export button error:', err);
+        setStatus('Export failed. See console.');
+      }
+    });
+  } catch (err) {
+    console.error('[UI] Failed to initialize export button:', err);
+  }
       });
 
 // Message handler is already set above with window.onmessage

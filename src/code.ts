@@ -34,7 +34,6 @@ async function checkAndSendFillInfo() {
   
   // Always get thumbnails and show them, even for single image
   console.log(`[Code] Found ${imageFills.length} image fill(s), generating thumbnails...`);
-  figma.ui.postMessage({ type: 'status', message: 'Generating thumbnails…' });
   
   try {
     const thumbnails = await getImageThumbnails(node);
@@ -167,7 +166,7 @@ async function getImageThumbnails(node: SceneNode): Promise<Array<{ hash: string
   return thumbnails;
 }
 
-async function exportSelectedWithMetadata(scale: number = 1, selectedImageHash?: string) {
+async function exportSelectedWithMetadata(exportSettings: { type: 'scale' | 'width' | 'height'; value: number }, selectedImageHash?: string) {
   if (figma.currentPage.selection.length === 0) {
     figma.notify('Select a node with an image fill.');
     return;
@@ -204,12 +203,27 @@ async function exportSelectedWithMetadata(scale: number = 1, selectedImageHash?:
   // Best-effort: this should return the originally uploaded bytes (may include metadata)
   const originalBytes = await figma.getImageByHash(imageHash).getBytesAsync();
 
-  figma.ui.postMessage({ type: 'status', message: `Exporting cropped view @${scale}x…` });
+  // Build constraint based on export settings
+  let constraint: { type: 'SCALE' | 'WIDTH' | 'HEIGHT'; value: number };
+  let statusMessage: string;
+  
+  if (exportSettings.type === 'scale') {
+    constraint = { type: 'SCALE', value: exportSettings.value };
+    statusMessage = `Exporting @${exportSettings.value}x…`;
+  } else if (exportSettings.type === 'width') {
+    constraint = { type: 'WIDTH', value: exportSettings.value };
+    statusMessage = `Exporting at width ${exportSettings.value}px…`;
+  } else {
+    constraint = { type: 'HEIGHT', value: exportSettings.value };
+    statusMessage = `Exporting at height ${exportSettings.value}px…`;
+  }
 
-  // Export current visual (cropped/resized) as JPEG at specified scale
+  figma.ui.postMessage({ type: 'status', message: statusMessage });
+
+  // Export current visual (cropped/resized) as JPEG with specified constraint
   const exportedBytes = await (node as ExportMixin).exportAsync({
     format: 'JPG',
-    constraint: { type: 'SCALE', value: scale },
+    constraint: constraint,
     jpgQuality: 1
   });
 
@@ -656,10 +670,10 @@ figma.ui.onmessage = async (msg) => {
     // Load metadata for a specific image hash
     await loadAndSendMetadata(msg.imageHash);
   } else if (msg?.type === 'export') {
-    const scale = msg.scale || 1;
+    const exportSettings = msg.exportSettings || { type: 'scale', value: 2 };
     const selectedImageHash = msg.selectedImageHash;
-    console.log('[Code] Starting JPEG export @' + scale + 'x', selectedImageHash ? `(using selected image)` : '');
-    exportSelectedWithMetadata(scale, selectedImageHash).catch((err) => {
+    console.log('[Code] Starting JPEG export', exportSettings, selectedImageHash ? `(using selected image)` : '');
+    exportSelectedWithMetadata(exportSettings, selectedImageHash).catch((err) => {
       figma.notify('Export failed. See console.');
       console.error('[Code] Export error:', err);
     });

@@ -1,5 +1,5 @@
 {
-  "name": "Export Images with Metadata",
+  "name": "Emu — Export Images with Metadata",
   "id": "1568652085896310555",
   "api": "1.0.0",
   "main": "dist/code.js",

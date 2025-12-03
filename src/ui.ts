@@ -12,7 +12,7 @@ function setStatus(text: string) {
 
 function updateExportButtonText(nodeName: string | null | undefined) {
   const exportBtn = byId('export');
-  exportBtn.textContent = 'Export';
+  exportBtn.textContent = '🦤 Export';
 }
 
 function updateLayerNameInput(nodeName: string | null | undefined) {
@@ -25,7 +25,7 @@ function handleRenameLayer() {
 
 function getExportSettings(): { type: 'scale' | 'width' | 'height'; value: number } {
   const scaleInput = document.getElementById('scale-input') as HTMLInputElement;
-  const inputValue = scaleInput ? scaleInput.value.trim().toLowerCase() : '2x';
+  const inputValue = scaleInput ? scaleInput.value.trim().toLowerCase() : '1x';
   
   // Parse input value
   // 1x, 2x -> scale
@@ -48,8 +48,8 @@ function getExportSettings(): { type: 'scale' | 'width' | 'height'; value: numbe
     }
   }
   
-  // Default to 2x if parsing fails
-  return { type: 'scale', value: 2 };
+  // Default to 1x if parsing fails
+  return { type: 'scale', value: 1 };
 }
 
 // Store selected image hash for metadata source

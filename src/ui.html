@@ -9,19 +9,20 @@
         font: 12px -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif; 
         margin: 0; 
         padding: 0;
-        padding-bottom: 56px;
         overflow-y: auto; 
         display: flex;
         flex-direction: column;
-        height: 100vh;
-        max-height: 100vh;
         box-sizing: border-box;
       }
       body:not(.has-content) {
+        height: 100vh;
+        max-height: 100vh;
         overflow: hidden;
       }
       body.has-content {
         padding: 16px;
+        padding-bottom: 56px;
+        min-height: 100vh;
       }
       .sticky-bar {
         position: fixed;
@@ -38,11 +39,9 @@
         display: flex;
         align-items: center;
       }
-      body.has-content {
-        padding: 16px;
-      }
       #instruction-text {
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
         flex: 1;
@@ -50,10 +49,25 @@
         padding: 16px;
         height: 100vh;
         box-sizing: border-box;
+        position: relative;
       }
-      #instruction-text::first-line {
+      #instruction-text > div:first-child {
         font-size: 26px;
         line-height: 1.2;
+        margin-bottom: 8px;
+      }
+      #instruction-text > div:nth-child(2) {
+        margin-bottom: 0;
+      }
+      #error-message {
+        color: #666;
+        font-size: 11px;
+        margin-top: 12px;
+        position: absolute;
+        top: calc(50% + 24px);
+        left: 50%;
+        transform: translateX(-50%);
+        white-space: nowrap;
       }
       body.has-content #instruction-text {
         display: none;
@@ -199,12 +213,12 @@
       }
       #thumbnail-selection { display: none; margin-top: 0; padding: 12px; background: #f5f5f5; border-radius: 4px; }
       #thumbnail-selection h2 { font-size: 13px; margin: 0 0 8px; }
-      .thumbnail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; margin-top: 8px; }
-      .thumbnail-item { cursor: pointer; border: 2px solid transparent; border-radius: 4px; padding: 4px; transition: border-color 0.2s; }
+      .thumbnail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; margin-top: 8px; margin-bottom: 0; }
+      .thumbnail-item { cursor: pointer; border: 2px solid transparent; border-radius: 4px; padding: 4px; padding-bottom: 4px; transition: border-color 0.2s; min-height: 104px; display: flex; flex-direction: column; }
       .thumbnail-item:hover { border-color: #0066ff; }
       .thumbnail-item.selected { border-color: #0066ff; background: #e6f2ff; }
-      .thumbnail-item img { width: 100%; height: auto; display: block; border-radius: 2px; }
-      .thumbnail-item .label { text-align: center; font-size: 10px; color: #666; margin-top: 4px; }
+      .thumbnail-item img { width: 100%; height: auto; display: block; border-radius: 2px; flex-shrink: 0; }
+      .thumbnail-item .label { text-align: center; font-size: 10px; color: #666; margin-top: 8px; flex-shrink: 0; overflow: visible; white-space: normal; }
              #metadata-display { display: none; margin-top: 12px; padding: 0; background: transparent; }
              #metadata-display h2 { font-size: 13px; font-weight: 600; margin: 0 0 8px; color: #000; }
              .metadata-section { margin-bottom: 16px; }
@@ -217,17 +231,21 @@
     </style>
   </head>
   <body>
-    <div id="instruction-text">🦤<br>Select a layer with an image fill.</div>
+    <div id="instruction-text">
+      <div>🦤</div>
+      <div>Select a layer with an image fill.</div>
+      <div id="error-message" style="display: none;"></div>
+    </div>
     <div class="sticky-bar" id="sticky-bar">
       <div class="row" id="export-row">
         <div class="scale-controls">
-          <input type="text" id="scale-input" name="scale" value="1x" placeholder="1x" />
+          <input type="text" id="scale-input" name="scale" value="2x" placeholder="2x" />
           <select id="scale-preset" name="scale-preset">
             <option value="0.5x">0.5x</option>
             <option value="0.75x">0.75x</option>
-            <option value="1x" selected>1x</option>
+            <option value="1x">1x</option>
             <option value="1.5x">1.5x</option>
-            <option value="2x">2x</option>
+            <option value="2x" selected>2x</option>
             <option value="3x">3x</option>
             <option value="4x">4x</option>
             <option value="512w">512w</option>

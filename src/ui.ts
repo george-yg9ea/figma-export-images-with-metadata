@@ -25,7 +25,7 @@ function handleRenameLayer() {
 
 function getExportSettings(): { type: 'scale' | 'width' | 'height'; value: number } {
   const scaleInput = document.getElementById('scale-input') as HTMLInputElement;
-  const inputValue = scaleInput ? scaleInput.value.trim().toLowerCase() : '1x';
+  const inputValue = scaleInput ? scaleInput.value.trim().toLowerCase() : '2x';
   
   // Parse input value
   // 1x, 2x -> scale
@@ -48,8 +48,8 @@ function getExportSettings(): { type: 'scale' | 'width' | 'height'; value: numbe
     }
   }
   
-  // Default to 1x if parsing fails
-  return { type: 'scale', value: 1 };
+  // Default to 2x if parsing fails
+  return { type: 'scale', value: 2 };
 }
 
 // Store selected image hash for metadata source
@@ -285,12 +285,18 @@ window.onmessage = async (event) => {
     document.body.classList.remove('has-content');
     // Hide sticky bar
     byId('sticky-bar').classList.remove('visible');
+    // Hide error message
+    const errorMessage = byId('error-message');
+    if (errorMessage) {
+      errorMessage.style.display = 'none';
+      errorMessage.textContent = '';
+    }
     updateExportButtonText(null);
     updateLayerNameInput(null);
   } else if (msg.type === 'no-image-fills') {
     hideThumbnailSelection();
     hideMetadataDisplay();
-    setStatus('Selected node does not have an image fill.');
+    setStatus('');
     // Show instruction text
     const instructionText = byId('instruction-text');
     instructionText.style.display = 'flex';
@@ -298,6 +304,12 @@ window.onmessage = async (event) => {
     document.body.classList.remove('has-content');
     // Hide sticky bar
     byId('sticky-bar').classList.remove('visible');
+    // Show error message in instruction text
+    const errorMessage = byId('error-message');
+    if (errorMessage) {
+      errorMessage.textContent = 'Selected node does not have an image fill.';
+      errorMessage.style.display = 'block';
+    }
     updateExportButtonText(null);
     updateLayerNameInput(null);
   } else if (msg.type === 'update-export-button') {

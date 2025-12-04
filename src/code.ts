@@ -670,7 +670,7 @@ figma.ui.onmessage = async (msg) => {
     // Load metadata for a specific image hash
     await loadAndSendMetadata(msg.imageHash);
   } else if (msg?.type === 'export') {
-    const exportSettings = msg.exportSettings || { type: 'scale', value: 1 };
+    const exportSettings = msg.exportSettings || { type: 'scale', value: 2 };
     const selectedImageHash = msg.selectedImageHash;
     console.log('[Code] Starting JPEG export', exportSettings, selectedImageHash ? `(using selected image)` : '');
     exportSelectedWithMetadata(exportSettings, selectedImageHash).catch((err) => {
